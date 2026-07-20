@@ -92,6 +92,9 @@ GaitAnalyzer analyzer(DEFAULT_VALIDATION_THRESHOLD_G);
 float asymmetry = 0.0f;
 uint32_t lastDisplayTime = 0;
 
+bool diagnosticFlashing = false;
+uint32_t diagnosticFlashUntil = 0;
+
 // ─── Overload 1: centered layout (IDLE, DIAGNOSTIC, CALIBRATION, PAUSE) ───
 void updateDisplay(const char *bodyCenter = nullptr)
 {
@@ -160,6 +163,7 @@ void enterCalibrationState()
 void transitionTo(SystemState newState)
 {
     currentState = newState;
+    diagnosticFlashing = false; // clear any pending flash from the previous state
 
     // A single switch groups every state's "on entry" action.
     switch (currentState)
@@ -246,8 +250,8 @@ void loop()
                 Hardware::beep(TONE_DIAGNOSTIC_IMPACT_HZ, TONE_DIAGNOSTIC_IMPACT_MS);
                 const char *impactSide = msg.isLeft ? "LEFT" : "RIGHT";
                 updateDisplay(impactSide);
-                delay(DIAGNOSTIC_FLASH_DURATION_MS);
-                updateDisplay();
+                diagnosticFlashing = true;
+                diagnosticFlashUntil = now + DIAGNOSTIC_FLASH_DURATION_MS;
                 lastDisplayTime = now;
             }
             else if (currentState == SystemState::CALIBRATION && msg.peakForce >= analyzer.getMinForceThreshold())
@@ -324,7 +328,13 @@ void loop()
     }
     else if (currentState == SystemState::DIAGNOSTIC || currentState == SystemState::PAUSE)
     {
-        if (refreshDue)
+        if (diagnosticFlashing && now >= diagnosticFlashUntil)
+        {
+            updateDisplay(); // revert to blank side indicator
+            diagnosticFlashing = false;
+            lastDisplayTime = now;
+        }
+        else if (refreshDue && !diagnosticFlashing)
         {
             updateDisplay();
             lastDisplayTime = now;
@@ -358,7 +368,7 @@ void loop()
             transitionTo(SystemState::IDLE);
         break;
     case SystemState::PAUSE:
-        if (btnShort)
+        if (btnShort && anklesConnected)
             transitionTo(SystemState::RUNNING_NORMAL);
         if (btnLong)
             transitionTo(SystemState::IDLE);
