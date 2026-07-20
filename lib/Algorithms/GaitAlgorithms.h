@@ -17,7 +17,10 @@ private:
     float thresholdG_;
     bool isInsideImpact_ = false;
     float currentPeak_ = 0.0f;
-    uint32_t lastImpactEndMs_ = 0;
+    // Initialized so that (nowMs - lastImpactEndMs_) is already >=
+    // REFRACTORY_PERIOD_MS on the very first sample, regardless of when
+    // nowMs starts counting. Relies on well-defined uint32_t wraparound.
+    uint32_t lastImpactEndMs_ = static_cast<uint32_t>(0 - REFRACTORY_PERIOD_MS);
 
 public:
     explicit ImpactDetector(float thresholdG) : thresholdG_(thresholdG) {}
@@ -50,6 +53,9 @@ private:
     uint8_t leftStepCount_ = 0, rightStepCount_ = 0;
     float leftAccumulator_ = 0.0f, rightAccumulator_ = 0.0f;
 
+    // Steps received after a side already hit CALIBRATION_STEPS_PER_SIDE.
+    uint8_t discardedCalibrationSteps_ = 0;
+
     float leftBuffer_[RUNNING_WINDOW_SIZE] = {0.0f};
     float rightBuffer_[RUNNING_WINDOW_SIZE] = {0.0f};
     uint8_t leftBufferIdx_ = 0;
@@ -70,6 +76,8 @@ public:
     // reached CALIBRATION_STEPS_PER_SIDE and personalizedAsymmetryThreshold_
     // has been computed from the runner's baseline.
     bool addCalibrationStep(float force, bool isLeft);
+
+    uint8_t getDiscardedCalibrationSteps() const { return discardedCalibrationSteps_; }
 
     // Pushes one footstrike force into the rolling window for `isLeft` side.
     void addRunningStep(float force, bool isLeft);

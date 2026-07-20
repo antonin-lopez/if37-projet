@@ -34,6 +34,7 @@ void GaitAnalyzer::reset()
 {
     leftStepCount_ = rightStepCount_ = 0;
     leftAccumulator_ = rightAccumulator_ = 0.0f;
+    discardedCalibrationSteps_ = 0;
 
     leftBufferIdx_ = rightBufferIdx_ = 0;
     leftBufferCount_ = rightBufferCount_ = 0;
@@ -59,6 +60,13 @@ bool GaitAnalyzer::addCalibrationStep(float force, bool isLeft)
         rightAccumulator_ += force;
         rightStepCount_++;
         addRunningStep(force, isLeft);
+    }
+    else
+    {
+        // Side already calibrated but wrist keeps receiving impacts from
+        // it (runner favoring one leg during calibration, etc). Track it
+        // instead of dropping silently, so it's visible for diagnostics.
+        discardedCalibrationSteps_++;
     }
 
     if (leftStepCount_ >= CALIBRATION_STEPS_PER_SIDE && rightStepCount_ >= CALIBRATION_STEPS_PER_SIDE)

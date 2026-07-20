@@ -106,9 +106,7 @@ void updateDisplay(const char *bodyCenter = nullptr)
     }
 
     StateVisuals visuals = getStateVisuals(currentState);
-    const char *centerData = (currentState == SystemState::CALIBRATION) ? "STEPS: 0/32" : "";
-    if (bodyCenter != nullptr)
-        centerData = bodyCenter;
+    const char *centerData = (bodyCenter != nullptr) ? bodyCenter : "";
 
     Hardware::setBackgroundColor(visuals.bgColor);
     Hardware::display(visuals.title, centerData, leftBatParam, rightBatParam);

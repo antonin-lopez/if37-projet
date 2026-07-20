@@ -22,7 +22,7 @@ namespace Hardware
     void setBackgroundColor(uint32_t rgbColor);
     void beep(uint32_t frequencyHz, uint32_t durationMs);
 
-    // Centered layout: IDLE, DIAGNOSTIC, CALIBRATION, PAUSE.
+    // Centered layout: IDLE, DIAGNOSTIC, PAUSE.
     // leftBat/rightBat: -2 = hidden, -1 = "disconnected", >=0 = battery %.
     void display(const char *header, const char *bodyCenter = "", int leftBat = -2, int rightBat = -2);
 
