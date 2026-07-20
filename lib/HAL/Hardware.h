@@ -1,24 +1,31 @@
 #pragma once
 #include <cstdint>
 
+// Thin hardware abstraction layer over M5Unified.
+//
+// Every wrist/ankle target talks to the M5StickC Plus2 exclusively through
+// this namespace, so the application layer (src/*/main.cpp) never touches
+// M5Unified directly. This keeps main.cpp portable and easy to unit-test
+// in isolation from the actual hardware.
 namespace Hardware
 {
-    // Initialisation et cycle de vie
+    // ── Lifecycle ──
     void init();
     void update();
-    
-    // Entrées utilisateur
+
+    // ── User input ──
     bool isShortPress();
     bool isLongPress();
-    
-    // Capteurs et Actionneurs
+
+    // ── Sensors & actuators ──
     float getAccelMagnitude();
     void setBackgroundColor(uint32_t rgbColor);
     void beep(uint32_t frequencyHz, uint32_t durationMs);
 
-    // Surcharge 1 : Disposition "Centrée" -> IDLE, DIAGNOSTIC, CALIBRATION, PAUSE
+    // Centered layout: IDLE, DIAGNOSTIC, CALIBRATION, PAUSE.
+    // leftBat/rightBat: -2 = hidden, -1 = "disconnected", >=0 = battery %.
     void display(const char *header, const char *bodyCenter = "", int leftBat = -2, int rightBat = -2);
 
-    // Surcharge 2 : Disposition "Scindée" -> RUNNING (Normal & Alerte)
+    // Split layout (left/right columns): RUNNING_NORMAL, RUNNING_ALERT, CALIBRATION.
     void display(const char *header, const char *bodyLeft, const char *bodyRight, int leftBat = -2, int rightBat = -2);
 }

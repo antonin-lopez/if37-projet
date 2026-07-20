@@ -1,2 +1,13 @@
-.pio
-.vscode
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editors / IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db

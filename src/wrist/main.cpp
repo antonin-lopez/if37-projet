@@ -5,7 +5,12 @@
 #include "Hardware.h"
 #include "GaitAlgorithms.h"
 
-// ─── ARCHITECTURE DE DESIGN TRADITIONNELLE FREERTOS ───
+// ─── FreeRTOS ARCHITECTURE ───
+// The ESP-NOW receive callback runs on the WiFi/network task, not on the
+// main loop task. To avoid touching shared state from two different tasks
+// (and all the race conditions that come with it), the callback only ever
+// pushes a copy of the incoming message onto `eventQueue`. All actual state
+// mutation and rendering happens synchronously inside loop().
 enum class EventType
 {
     IMPACT,
@@ -22,22 +27,59 @@ struct SystemEvent
     } data;
 };
 
-// File d'attente pour le passage sécurisé des messages inter-threads
 QueueHandle_t eventQueue = nullptr;
 
-// ─── STOCKS SÉCURISÉS (Exclusivement modifiés dans le thread principal loop) ───
-float leftForce = 0.0f, rightForce = 0.0f;
+namespace
+{
+    // How long an ankle unit can go without a heartbeat before it's
+    // considered disconnected.
+    constexpr uint32_t ANKLE_TIMEOUT_MS = 1500;
+    // Minimum interval between two display redraws while running/idle.
+    constexpr uint32_t DISPLAY_REFRESH_INTERVAL_MS = 500;
+    // How long a side indicator stays on screen in DIAGNOSTIC mode.
+    constexpr uint32_t DIAGNOSTIC_FLASH_DURATION_MS = 200;
+    constexpr uint32_t LOOP_DELAY_MS = 10;
+
+    struct StateVisuals
+    {
+        const char *title;
+        uint32_t bgColor;
+    };
+
+    // Single source of truth for the title/color associated with each
+    // SystemState, shared by both updateDisplay() overloads below.
+    StateVisuals getStateVisuals(SystemState state)
+    {
+        switch (state)
+        {
+        case SystemState::IDLE:
+            return {"IDLE", 0x000000};
+        case SystemState::DIAGNOSTIC:
+            return {"DIAGNOSTIC", 0xFFFF00};
+        case SystemState::CALIBRATION:
+            return {"CALIBRATION", 0x0000FF};
+        case SystemState::RUNNING_NORMAL:
+            return {"RUNNING (OK)", 0x00FF00};
+        case SystemState::RUNNING_ALERT:
+            return {"ASYMMETRY ALERT!", 0xFF0000};
+        case SystemState::PAUSE:
+            return {"PAUSE", 0xFF00FF};
+        }
+        return {"", 0x000000};
+    }
+}
+
+// ─── State (owned exclusively by the main loop task) ───
 uint32_t leftHeartbeatTime = 0, rightHeartbeatTime = 0;
 uint8_t leftBattery = 0;
 uint8_t rightBattery = 0;
 
-// ─── LOGIQUE ET ÉTATS ───
 SystemState currentState = SystemState::IDLE;
-GaitAnalyzer analyzer(DEFAULT_VALIDATION_THRESHOLD);
+GaitAnalyzer analyzer(DEFAULT_VALIDATION_THRESHOLD_G);
 float asymmetry = 0.0f;
 uint32_t lastDisplayTime = 0;
 
-// ─── SURCHARGE 1 : Affichage Centré (Repos, Diagnostic, Calibration, Pause) ───
+// ─── Overload 1: centered layout (IDLE, DIAGNOSTIC, CALIBRATION, PAUSE) ───
 void updateDisplay(const char *bodyCenter = nullptr)
 {
     uint32_t now = millis();
@@ -46,83 +88,28 @@ void updateDisplay(const char *bodyCenter = nullptr)
 
     if (currentState == SystemState::DIAGNOSTIC || currentState == SystemState::PAUSE)
     {
-        leftBatParam = (now - leftHeartbeatTime < 1500) ? leftBattery : -1;
-        rightBatParam = (now - rightHeartbeatTime < 1500) ? rightBattery : -1;
+        leftBatParam = (now - leftHeartbeatTime < ANKLE_TIMEOUT_MS) ? leftBattery : -1;
+        rightBatParam = (now - rightHeartbeatTime < ANKLE_TIMEOUT_MS) ? rightBattery : -1;
     }
 
-    const char *title = "";
-    const char *centerData = "";
-    uint32_t bgColor = 0x000000;
-
-    switch (currentState)
-    {
-    case SystemState::IDLE:
-        title = "REPOS";
-        bgColor = 0x000000;
-        break;
-    case SystemState::DIAGNOSTIC:
-        title = "DIAGNOSTIC";
-        bgColor = 0xFFFF00;
-        break;
-    case SystemState::CALIBRATION:
-        title = "CALIBRATION";
-        centerData = "PAS: 0/32";
-        bgColor = 0x0000FF;
-        break;
-    case SystemState::RUNNING_NORMAL:
-        title = "COURSE (OK)";
-        bgColor = 0x00FF00;
-        break;
-    case SystemState::RUNNING_ALERT:
-        title = "ALERTE ASYM!";
-        bgColor = 0xFF0000;
-        break;
-    case SystemState::PAUSE:
-        title = "PAUSE";
-        bgColor = 0xFF00FF;
-        break;
-    }
-
+    StateVisuals visuals = getStateVisuals(currentState);
+    const char *centerData = (currentState == SystemState::CALIBRATION) ? "STEPS: 0/32" : "";
     if (bodyCenter != nullptr)
-    {
         centerData = bodyCenter;
-    }
 
-    Hardware::setBackgroundColor(bgColor);
-    Hardware::display(title, centerData, leftBatParam, rightBatParam);
+    Hardware::setBackgroundColor(visuals.bgColor);
+    Hardware::display(visuals.title, centerData, leftBatParam, rightBatParam);
 }
 
-// ─── SURCHARGE 2 : Affichage Scindé (Utilisé uniquement en Course) ───
+// ─── Overload 2: split layout (used only while RUNNING or CALIBRATION) ───
 void updateDisplay(const char *bodyLeft, const char *bodyRight)
 {
-    const char *title = "";
-    uint32_t bgColor = 0x000000;
-
-    switch (currentState)
-    {
-    case SystemState::RUNNING_NORMAL:
-        title = "COURSE (OK)";
-        bgColor = 0x00FF00;
-        break;
-    case SystemState::RUNNING_ALERT:
-        title = "ALERTE ASYM!";
-        bgColor = 0xFF0000;
-        break;
-    case SystemState::CALIBRATION:
-        title = "CALIBRATION";
-        bgColor = 0x0000FF;
-        break;
-    default:
-        title = "COURSE";
-        bgColor = 0x000000;
-        break;
-    }
-
-    Hardware::setBackgroundColor(bgColor);
-    Hardware::display(title, bodyLeft, bodyRight);
+    StateVisuals visuals = getStateVisuals(currentState);
+    Hardware::setBackgroundColor(visuals.bgColor);
+    Hardware::display(visuals.title, bodyLeft, bodyRight);
 }
 
-// ─── CALLBACK RECEPTION SANS FIL (Thread Réseau - ISR/Asynchrones) ───
+// ─── Wireless receive callback (network task - ISR-like, keep it minimal) ───
 void onDataReceived(const uint8_t *mac, const uint8_t *data, int len)
 {
     if (eventQueue == nullptr)
@@ -134,8 +121,7 @@ void onDataReceived(const uint8_t *mac, const uint8_t *data, int len)
     {
         event.type = EventType::IMPACT;
         memcpy(&event.data.impact, data, sizeof(ImpactMessage));
-        // Envoi non bloquant (délai 0) pour ne pas figer la pile réseau ESP-NOW
-        xQueueSend(eventQueue, &event, 0);
+        xQueueSend(eventQueue, &event, 0); // Non-blocking: never stall the network stack.
     }
     else if (len == sizeof(HeartbeatMessage))
     {
@@ -147,17 +133,14 @@ void onDataReceived(const uint8_t *mac, const uint8_t *data, int len)
 
 void enterCalibrationState()
 {
-    // 1. Réinitialisation de l'analyseur
     analyzer.reset();
 
-    // 2. Préparation et rendu de la vue spécifique (Affichage scindé)
     char strLeft[16];
     char strRight[16];
-    snprintf(strLeft, sizeof(strLeft), "G: %d", GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE);
-    snprintf(strRight, sizeof(strRight), "D: %d", GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE);
+    snprintf(strLeft, sizeof(strLeft), "L: %d", GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE);
+    snprintf(strRight, sizeof(strRight), "R: %d", GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE);
     updateDisplay(strLeft, strRight);
 
-    // 3. Signal sonore d'entrée de jeu
     Hardware::beep(1000, 50);
     delay(80);
     Hardware::beep(1000, 50);
@@ -167,11 +150,11 @@ void transitionTo(SystemState newState)
 {
     currentState = newState;
 
-    // Un seul switch lisible regroupe toutes les actions d'entrée ("On Entry")
+    // A single switch groups every state's "on entry" action.
     switch (currentState)
     {
     case SystemState::CALIBRATION:
-        enterCalibrationState(); // Délégation complète des détails
+        enterCalibrationState();
         break;
 
     case SystemState::DIAGNOSTIC:
@@ -188,7 +171,7 @@ void transitionTo(SystemState newState)
     case SystemState::RUNNING_ALERT:
     case SystemState::PAUSE:
     default:
-        updateDisplay(); // Comportement d'affichage générique par défaut
+        updateDisplay();
         break;
     }
 
@@ -200,11 +183,10 @@ void setup()
     Serial.begin(115200);
     Hardware::init();
 
-    // Initialisation de la Queue capable de stocker 20 événements simultanés
     eventQueue = xQueueCreate(20, sizeof(SystemEvent));
     if (eventQueue == nullptr)
     {
-        Serial.println("Erreur critique: Impossible de créer la Queue FreeRTOS");
+        Serial.println("Fatal: failed to create FreeRTOS queue");
         esp_restart();
     }
 
@@ -222,26 +204,17 @@ void loop()
 
     bool btnShort = Hardware::isShortPress();
     bool btnLong = Hardware::isLongPress();
-    bool anklesConnected = (now - leftHeartbeatTime < 1500) && (now - rightHeartbeatTime < 1500);
-    bool refreshDue = (now - lastDisplayTime >= 500);
+    bool anklesConnected = (now - leftHeartbeatTime < ANKLE_TIMEOUT_MS) && (now - rightHeartbeatTime < ANKLE_TIMEOUT_MS);
+    bool refreshDue = (now - lastDisplayTime >= DISPLAY_REFRESH_INTERVAL_MS);
     bool runningImpactProcessed = false;
 
-    // ÉTAPE 1 : DÉPILAGE ET TRAITEMENT SYNCHRONE DES ÉVÉNEMENTS (Zéro Concurrence/Race Condition)
+    // ── STEP 1: drain and process queued events synchronously (zero race conditions) ──
     SystemEvent event;
     while (xQueueReceive(eventQueue, &event, 0) == pdTRUE)
     {
         if (event.type == EventType::IMPACT)
         {
             ImpactMessage msg = event.data.impact;
-
-            if (msg.isLeft)
-            {
-                leftForce = msg.peakForce;
-            }
-            else
-            {
-                rightForce = msg.peakForce;
-            }
 
             if (currentState == SystemState::RUNNING_NORMAL || currentState == SystemState::RUNNING_ALERT)
             {
@@ -251,9 +224,9 @@ void loop()
             else if (currentState == SystemState::DIAGNOSTIC)
             {
                 Hardware::beep(1000, 50);
-                const char *impactSide = msg.isLeft ? "GAUCHE" : "DROITE";
+                const char *impactSide = msg.isLeft ? "LEFT" : "RIGHT";
                 updateDisplay(impactSide);
-                delay(200);
+                delay(DIAGNOSTIC_FLASH_DURATION_MS);
                 updateDisplay();
                 lastDisplayTime = now;
             }
@@ -261,16 +234,13 @@ void loop()
             {
                 bool calibDone = analyzer.addCalibrationStep(msg.peakForce, msg.isLeft);
 
-                // ─── CALCUL DES PAS RESTANTS PAR CÔTÉ ───
                 int leftRemaining = GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE - analyzer.getLeftStepCount();
                 int rightRemaining = GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE - analyzer.getRightStepCount();
 
                 char strLeft[16];
                 char strRight[16];
-                snprintf(strLeft, sizeof(strLeft), "G: %d", leftRemaining);
-                snprintf(strRight, sizeof(strRight), "D: %d", rightRemaining);
-
-                // Utilisation de la surcharge d'affichage scindée (Gauche / Droite)
+                snprintf(strLeft, sizeof(strLeft), "L: %d", leftRemaining);
+                snprintf(strRight, sizeof(strRight), "R: %d", rightRemaining);
                 updateDisplay(strLeft, strRight);
 
                 if (calibDone)
@@ -293,7 +263,7 @@ void loop()
         }
     }
 
-    // ÉTAPE 2 : CALCULS ET AFFICHAGE EN TEMPS RÉEL DE LA COURSE
+    // ── STEP 2: real-time computation and display while running ──
     if (currentState == SystemState::RUNNING_NORMAL || currentState == SystemState::RUNNING_ALERT)
     {
         if (!anklesConnected)
@@ -325,9 +295,8 @@ void loop()
             {
                 char strLeft[16];
                 char strRight[16];
-                snprintf(strLeft, sizeof(strLeft), "G: %.0f%%", pctLeft);
-                snprintf(strRight, sizeof(strRight), "D: %.0f%%", pctRight);
-
+                snprintf(strLeft, sizeof(strLeft), "L: %.0f%%", pctLeft);
+                snprintf(strRight, sizeof(strRight), "R: %.0f%%", pctRight);
                 updateDisplay(strLeft, strRight);
                 lastDisplayTime = now;
             }
@@ -342,7 +311,7 @@ void loop()
         }
     }
 
-    // ÉTAPE 3 : MACHINE D'ÉTAT (Boutons physiques)
+    // ── STEP 3: state machine (physical button) ──
     switch (currentState)
     {
     case SystemState::IDLE:
@@ -376,5 +345,5 @@ void loop()
         break;
     }
 
-    delay(10); // Laisse s'exécuter l'ordonnanceur FreeRTOS de l'ESP32
+    delay(LOOP_DELAY_MS); // Let the ESP32's FreeRTOS scheduler run other tasks.
 }

@@ -4,7 +4,7 @@
 
 std::optional<float> ImpactDetector::processSample(float currentSample, uint32_t nowMs)
 {
-    if (!isInsideImpact_ && (nowMs - lastImpactEndMs_) < 250)
+    if (!isInsideImpact_ && (nowMs - lastImpactEndMs_) < REFRACTORY_PERIOD_MS)
         return std::nullopt;
 
     if (!isInsideImpact_)
@@ -37,13 +37,13 @@ void GaitAnalyzer::reset()
 
     leftBufferIdx_ = rightBufferIdx_ = 0;
     leftBufferCount_ = rightBufferCount_ = 0;
-    for (uint8_t i = 0; i < BUFFER_SIZE; ++i)
+    for (uint8_t i = 0; i < RUNNING_WINDOW_SIZE; ++i)
     {
         leftBuffer_[i] = 0.0f;
         rightBuffer_[i] = 0.0f;
     }
 
-    personalizedAsymmetryThreshold_ = 10.0f;
+    personalizedAsymmetryThreshold_ = ASYMMETRY_ALERT_MARGIN_PERCENT;
 }
 
 bool GaitAnalyzer::addCalibrationStep(float force, bool isLeft)
@@ -67,7 +67,10 @@ bool GaitAnalyzer::addCalibrationStep(float force, bool isLeft)
         float avgRightCalib = rightAccumulator_ / static_cast<float>(CALIBRATION_STEPS_PER_SIDE);
 
         float baselineAsymmetry = computeAsymmetry(avgLeftCalib, avgRightCalib);
-        personalizedAsymmetryThreshold_ = baselineAsymmetry + 10.0f; // Marche à suivre : 10% au-dessus de l'asymétrie de base pour éviter les alertes sur des différences normales
+        // Personal alert threshold = the runner's own baseline asymmetry,
+        // plus a fixed margin, so alerts trigger on deviation from *their*
+        // normal, not an arbitrary absolute value.
+        personalizedAsymmetryThreshold_ = baselineAsymmetry + ASYMMETRY_ALERT_MARGIN_PERCENT;
 
         return true;
     }
@@ -80,15 +83,15 @@ void GaitAnalyzer::addRunningStep(float force, bool isLeft)
     if (isLeft)
     {
         leftBuffer_[leftBufferIdx_] = force;
-        leftBufferIdx_ = (leftBufferIdx_ + 1) % BUFFER_SIZE;
-        if (leftBufferCount_ < BUFFER_SIZE)
+        leftBufferIdx_ = (leftBufferIdx_ + 1) % RUNNING_WINDOW_SIZE;
+        if (leftBufferCount_ < RUNNING_WINDOW_SIZE)
             leftBufferCount_++;
     }
     else
     {
         rightBuffer_[rightBufferIdx_] = force;
-        rightBufferIdx_ = (rightBufferIdx_ + 1) % BUFFER_SIZE;
-        if (rightBufferCount_ < BUFFER_SIZE)
+        rightBufferIdx_ = (rightBufferIdx_ + 1) % RUNNING_WINDOW_SIZE;
+        if (rightBufferCount_ < RUNNING_WINDOW_SIZE)
             rightBufferCount_++;
     }
 }

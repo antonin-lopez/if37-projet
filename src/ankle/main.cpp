@@ -6,30 +6,35 @@
 #include "Hardware.h"
 #include "GaitAlgorithms.h"
 
-ImpactDetector detector(DEFAULT_DETECTION_THRESHOLD);
-uint32_t lastHeartbeatMs = 0;
-uint32_t seqNum = 0;
+namespace
+{
+    constexpr uint32_t SAMPLE_INTERVAL_MS = 10;  // 100 Hz accelerometer sampling.
+    constexpr uint32_t HEARTBEAT_INTERVAL_MS = 500;
+    constexpr uint8_t SPLASH_TEXT_SIZE = 5;
 
-// Variables pour l'échantillonnage strict à 100 Hz
-uint32_t lastSampleMs = 0;
-const uint32_t SAMPLE_INTERVAL_MS = 10;
+    ImpactDetector detector(DEFAULT_DETECTION_THRESHOLD_G);
+    uint32_t lastHeartbeatMs = 0;
+    uint32_t seqNum = 0;
+
+    uint32_t lastSampleMs = 0;
+}
 
 void setup()
 {
     Hardware::init();
 
+    // Splash screen: which side is this unit strapped to.
     M5.Lcd.fillScreen(0x000000);
     M5.Lcd.setTextColor(0xFFFFFF);
-    M5.Lcd.setTextSize(5);
+    M5.Lcd.setTextSize(SPLASH_TEXT_SIZE);
 
     int w = M5.Lcd.width();
     int h = M5.Lcd.height();
-    const char *sideText = "";
 
 #if ANKLE_SIDE == 0
-    sideText = "GAUCHE";
+    const char *sideText = "LEFT";
 #else
-    sideText = "DROITE";
+    const char *sideText = "RIGHT";
 #endif
 
     int textW = M5.Lcd.textWidth(sideText);
@@ -55,10 +60,13 @@ void loop()
     Hardware::update();
     uint32_t now = millis();
 
-    // ÉTAPE 1 : Échantillonnage précis et cadencé à 100Hz (sans dérive due au temps de calcul)
+    // ── STEP 1: strict 100 Hz sampling, drift-free ──
+    // Advancing lastSampleMs by a fixed increment (rather than resetting it
+    // to `now`) keeps the sample rate accurate even if a loop iteration
+    // takes longer than SAMPLE_INTERVAL_MS.
     if (now - lastSampleMs >= SAMPLE_INTERVAL_MS)
     {
-        lastSampleMs += SAMPLE_INTERVAL_MS; // Rattrape le temps exact requis
+        lastSampleMs += SAMPLE_INTERVAL_MS;
 
         float accel = Hardware::getAccelMagnitude();
         auto peak = detector.processSample(accel, now);
@@ -73,12 +81,12 @@ void loop()
 #else
             msg.isLeft = 0;
 #endif
-            esp_now_send(WRIST_MAC, (uint8_t *)&msg, sizeof(msg));
+            esp_now_send(WRIST_MAC, reinterpret_cast<uint8_t *>(&msg), sizeof(msg));
         }
     }
 
-    // ÉTAPE 2 : Envoi automatique du Heartbeat toutes les 500 ms
-    if (now - lastHeartbeatMs >= 500)
+    // ── STEP 2: heartbeat, sent unconditionally every 500 ms ──
+    if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
     {
         HeartbeatMessage hb;
 #if ANKLE_SIDE == 0
@@ -88,10 +96,10 @@ void loop()
 #endif
         hb.batteryLevel = M5.Power.getBatteryLevel();
 
-        esp_now_send(WRIST_MAC, (uint8_t *)&hb, sizeof(hb));
+        esp_now_send(WRIST_MAC, reinterpret_cast<uint8_t *>(&hb), sizeof(hb));
         lastHeartbeatMs = now;
     }
 
-    // Un léger delay pour laisser respirer l'OS (FreeRTOS) de l'ESP32 sur ses autres tâches arrière-plan
+    // Small delay to let the ESP32's FreeRTOS scheduler service other tasks.
     delay(1);
 }
