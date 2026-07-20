@@ -20,6 +20,7 @@ namespace
 
 void setup()
 {
+    Serial.begin(115200);
     Hardware::init();
 
     // Splash screen: which side is this unit strapped to.
@@ -50,6 +51,11 @@ void setup()
     peerInfo.channel = 0;
     peerInfo.encrypt = false;
     esp_now_add_peer(&peerInfo);
+    if (esp_now_add_peer(&peerInfo) != ESP_OK)
+    {
+        Serial.println("Fatal: esp_now_add_peer failed");
+        esp_restart();
+    }
 
     lastSampleMs = millis();
 }

@@ -5,6 +5,10 @@
 #include "Hardware.h"
 #include "GaitAlgorithms.h"
 
+#ifndef TARGET_WRIST
+#error "src/wrist/main.cpp must be built with -DTARGET_WRIST (check platformio.ini env:wrist)"
+#endif
+
 // ─── FreeRTOS ARCHITECTURE ───
 // The ESP-NOW receive callback runs on the WiFi/network task, not on the
 // main loop task. To avoid touching shared state from two different tasks
