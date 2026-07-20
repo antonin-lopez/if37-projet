@@ -8,13 +8,12 @@
 
 namespace
 {
-    constexpr uint32_t SAMPLE_INTERVAL_MS = 10;  // 100 Hz accelerometer sampling.
+    constexpr uint32_t SAMPLE_INTERVAL_MS = 10; // 100 Hz accelerometer sampling.
     constexpr uint32_t HEARTBEAT_INTERVAL_MS = 500;
     constexpr uint8_t SPLASH_TEXT_SIZE = 5;
 
     ImpactDetector detector(DEFAULT_DETECTION_THRESHOLD_G);
     uint32_t lastHeartbeatMs = 0;
-    uint32_t seqNum = 0;
 
     uint32_t lastSampleMs = 0;
 }
@@ -75,7 +74,6 @@ void loop()
         {
             ImpactMessage msg;
             msg.peakForce = peak.value();
-            msg.seqNum = seqNum++;
 #if ANKLE_SIDE == 0
             msg.isLeft = 1;
 #else

@@ -39,7 +39,6 @@ struct ImpactMessage
 {
     float peakForce; // Peak acceleration magnitude of the impact, in g.
     uint8_t isLeft;  // 1 if this impact comes from the left ankle, 0 otherwise.
-    uint32_t seqNum; // Monotonically increasing per-device sequence number.
 };
 
 // Sent periodically by an ankle unit to report liveness and battery level.

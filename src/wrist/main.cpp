@@ -40,6 +40,19 @@ namespace
     constexpr uint32_t DIAGNOSTIC_FLASH_DURATION_MS = 200;
     constexpr uint32_t LOOP_DELAY_MS = 10;
 
+    // ── Buzzer tones/durations, named so every beep in the state machine
+    // is self-documenting instead of a bare magic number at the call site. ──
+    constexpr uint32_t TONE_CALIBRATION_STEP_HZ = 1000;
+    constexpr uint32_t TONE_CALIBRATION_STEP_MS = 50;
+    constexpr uint32_t TONE_DIAGNOSTIC_ENTER_HZ = 1000;
+    constexpr uint32_t TONE_DIAGNOSTIC_ENTER_MS = 50;
+    constexpr uint32_t TONE_DIAGNOSTIC_IMPACT_HZ = 1000;
+    constexpr uint32_t TONE_DIAGNOSTIC_IMPACT_MS = 50;
+    constexpr uint32_t TONE_RUNNING_START_HZ = 1500;
+    constexpr uint32_t TONE_RUNNING_START_MS = 400;
+    constexpr uint32_t TONE_ALERT_HZ = 2000;
+    constexpr uint32_t TONE_ALERT_MS = 150;
+
     struct StateVisuals
     {
         const char *title;
@@ -141,9 +154,9 @@ void enterCalibrationState()
     snprintf(strRight, sizeof(strRight), "R: %d", GaitAnalyzer::CALIBRATION_STEPS_PER_SIDE);
     updateDisplay(strLeft, strRight);
 
-    Hardware::beep(1000, 50);
+    Hardware::beep(TONE_CALIBRATION_STEP_HZ, TONE_CALIBRATION_STEP_MS);
     delay(80);
-    Hardware::beep(1000, 50);
+    Hardware::beep(TONE_CALIBRATION_STEP_HZ, TONE_CALIBRATION_STEP_MS);
 }
 
 void transitionTo(SystemState newState)
@@ -159,12 +172,12 @@ void transitionTo(SystemState newState)
 
     case SystemState::DIAGNOSTIC:
         updateDisplay();
-        Hardware::beep(1000, 50);
+        Hardware::beep(TONE_DIAGNOSTIC_ENTER_HZ, TONE_DIAGNOSTIC_ENTER_MS);
         break;
 
     case SystemState::RUNNING_NORMAL:
         updateDisplay();
-        Hardware::beep(1500, 400);
+        Hardware::beep(TONE_RUNNING_START_HZ, TONE_RUNNING_START_MS);
         break;
 
     case SystemState::IDLE:
@@ -191,7 +204,11 @@ void setup()
     }
 
     WiFi.mode(WIFI_STA);
-    esp_now_init();
+    if (esp_now_init() != ESP_OK)
+    {
+        Serial.println("Fatal: esp_now_init failed");
+        esp_restart();
+    }
     esp_now_register_recv_cb(onDataReceived);
 
     transitionTo(SystemState::IDLE);
@@ -218,12 +235,17 @@ void loop()
 
             if (currentState == SystemState::RUNNING_NORMAL || currentState == SystemState::RUNNING_ALERT)
             {
-                analyzer.addRunningStep(msg.peakForce, msg.isLeft);
-                runningImpactProcessed = true;
+                // Only steps that clear the wrist's own VALIDATION threshold
+                // are trusted for gait metrics (see Protocol.h).
+                if (msg.peakForce >= analyzer.getMinForceThreshold())
+                {
+                    analyzer.addRunningStep(msg.peakForce, msg.isLeft);
+                    runningImpactProcessed = true;
+                }
             }
             else if (currentState == SystemState::DIAGNOSTIC)
             {
-                Hardware::beep(1000, 50);
+                Hardware::beep(TONE_DIAGNOSTIC_IMPACT_HZ, TONE_DIAGNOSTIC_IMPACT_MS);
                 const char *impactSide = msg.isLeft ? "LEFT" : "RIGHT";
                 updateDisplay(impactSide);
                 delay(DIAGNOSTIC_FLASH_DURATION_MS);
@@ -284,7 +306,7 @@ void loop()
             if (currentState == SystemState::RUNNING_NORMAL && asymmetry > analyzer.getPersonalizedAsymmetryThreshold())
             {
                 transitionTo(SystemState::RUNNING_ALERT);
-                Hardware::beep(2000, 150);
+                Hardware::beep(TONE_ALERT_HZ, TONE_ALERT_MS);
             }
             else if (currentState == SystemState::RUNNING_ALERT && asymmetry <= analyzer.getPersonalizedAsymmetryThreshold())
             {
